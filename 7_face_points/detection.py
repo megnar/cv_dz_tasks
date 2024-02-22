@@ -1,11 +1,13 @@
 import cv2
 
 import albumentations as A
+from torchvision import datasets, models
 from torch import nn
 from PIL import Image
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader, Dataset
+
 
 import pandas as pd
 import os
@@ -59,10 +61,6 @@ def preprocess_data(image, keypoint):
       return resized_images_np, resized_keypoints_np
     return resized_images_np, np.ones((1))
 
-def read_csv_file(file_path):
-    df = pd.read_csv(file_path)
-    result = np.sort(np.array(df), axis = 0)
-    return np.array(df[:])
 
 def read_csv(filename):
     res = {}
@@ -192,7 +190,9 @@ class MyTrainingModule(pl.LightningModule):
         self.dropout_fc1 = nn.Dropout(p=0.5)
 
         self.fc2 = nn.Linear(128, 28)
-
+        # resnet
+        # self.resnet = models.resnet18(pretrained=False)
+        # self.resnet.fc = nn.Linear(512, 28)
         self.loss = nn.MSELoss()
 
 
@@ -229,6 +229,7 @@ class MyTrainingModule(pl.LightningModule):
         x = self.norm_fc1(x)
         x = self.dropout_fc1(x)
         x = self.fc2(x)
+       # x = self.resnet(x)
 
         return x
 
@@ -277,7 +278,7 @@ class MyTrainingModule(pl.LightningModule):
         y_logit = self(x)
         loss = self.loss(y_logit, y)
 
-        val_loss = torch.mean(((y_logit.detach() - y)) ** 2)
+        val_loss = torch.mean(((y_logit.detach() - y)) ** 2) / 5
         self.validation_step_outputs.append(val_loss)
 
         return {'loss': loss, 'val_loss': val_loss}
@@ -299,8 +300,8 @@ def train_detector(train_gt, train_img_dir, fast_train=True):
     )
     ds_train = MyCustomDataset(mode="train", data_dir=train_img_dir, gt_csv=train_gt, fast_train=fast_train)
     ds_val = MyCustomDataset(mode="val", data_dir=train_img_dir, gt_csv=train_gt)
-    dl_train = DataLoader(ds_train, batch_size=8, shuffle=True, num_workers=os.cpu_count())
-    dl_val = DataLoader(ds_val, batch_size=8, shuffle=False, num_workers=os.cpu_count())
+    dl_train = DataLoader(ds_train, batch_size=4, shuffle=True, num_workers=os.cpu_count())
+    dl_val = DataLoader(ds_val, batch_size=4, shuffle=False, num_workers=os.cpu_count())
 
     trainer1 = pl.Trainer(
         max_epochs=70,
@@ -338,6 +339,7 @@ def detect(model_filename, test_img_dir):
         test_img = Image.open(img_path).convert("RGB")
         test_img = np.array(test_img).astype(np.float32)
         test_img = test_img / 256
+        img_shape = test_img.shape
         image = torch.from_numpy(test_img).permute(2, 0, 1)
 
         image, label = preprocess_data(image = image, keypoint = np.zeros(28))
@@ -349,7 +351,9 @@ def detect(model_filename, test_img_dir):
         inputs = inputs.to("cpu")[None, :]
         res = model(inputs).detach()
 
-        res = res / 2.24
+        res = res[0].numpy()
+        res[0::2] = res[0::2] * img_shape[0] / 224
+        res[1::2] = res[1::2] * img_shape[1] / 224
         ans[image_name] = res
 
     return ans
